@@ -1,266 +1,318 @@
-import speech_recognition as sr
-import datetime
-import wikipedia
-import webbrowser
-import pyjokes
-from TTS.api import TTS
-import sounddevice as sd
 import argparse
-import os
-import numpy as np
-import whisper
-import torch
-
+import sys
 from datetime import datetime, timedelta
 from queue import Queue
 from time import sleep
-from sys import platform
+from typing import Optional
 
-# Load multi-speaker model
-tts = TTS("tts_models/en/vctk/vits")
+import numpy as np
+import pyjokes
+import sounddevice as sd
+import speech_recognition as sr
+import torch
+import webbrowser
+import wikipedia
+import whisper
+from TTS.api import TTS
 
-
-def speak(text: str = ""):
-    print(f"Assistant: {text}")
-    try:
-        audio = tts.tts(text=text, speaker="p226")
-        sample_rate = tts.synthesizer.output_sample_rate
-        sd.play(audio, samplerate=sample_rate)
-        sd.wait()
-    except Exception as e:
-        print(e)
-        print("Speech output not supported in Colab.")
-
-
-def wish_user():
-    hour = int(datetime.now().hour)
-    if hour < 12:
-        speak("Good Morning!")
-    elif hour < 18:
-        speak("Good Afternoon!")
-    else:
-        speak("Good Evening!")
-    speak("I am your voice assistant. How can I help you today?")
+# Constants
+SAMPLE_RATE = 16000
+IS_LINUX = sys.platform.startswith("linux")
 
 
-def take_command():
-    return input("You (type your command): ").lower()
+class VoiceAssistant:
+    """Main voice assistant class handling TTS and command processing."""
+
+    def __init__(self):
+        self.tts = TTS("tts_models/en/vctk/vits")
+
+    def speak(self, text: str = "") -> None:
+        """Convert text to speech and play it."""
+        if not text:
+            return
+        print(f"Assistant: {text}")
+        try:
+            audio = self.tts.tts(text=text, speaker="p226")
+            sample_rate = self.tts.synthesizer.output_sample_rate
+            sd.play(audio, samplerate=sample_rate)
+            sd.wait()
+        except Exception as e:
+            print(f"TTS Error: {e}")
+
+    def wish_user(self) -> None:
+        """Greet the user based on time of day."""
+        hour = datetime.now().hour
+        if hour < 12:
+            self.speak("Good Morning!")
+        elif hour < 18:
+            self.speak("Good Afternoon!")
+        else:
+            self.speak("Good Evening!")
+        self.speak("I am your voice assistant. How can I help you today?")
+
+    def handle_command(self, query: str) -> bool:
+        """
+        Process user commands.
+        Returns True if assistant should continue, False if should exit.
+        """
+        query = query.strip().lower()
+        if not query or query == "none":
+            return True
+
+        if "wikipedia" in query:
+            self._handle_wikipedia(query)
+        elif "open youtube" in query:
+            self.speak("Opening YouTube...")
+            webbrowser.open("https://www.youtube.com/")
+        elif "open google" in query:
+            self.speak("Opening Google...")
+            webbrowser.open("https://www.google.com/")
+        elif "time" in query:
+            current_time = datetime.now().strftime("%H:%M:%S")
+            self.speak(f"The current time is {current_time}")
+        elif "joke" in query:
+            joke = pyjokes.get_joke()
+            self.speak(joke)
+        elif "exit" in query or "bye" in query:
+            self.speak("Goodbye! Have a nice day!")
+            return False
+        else:
+            self.speak("Sorry, I didn't understand that. Try again.")
+        return True
+
+    def _handle_wikipedia(self, query: str) -> None:
+        """Handle Wikipedia search queries."""
+        self.speak("Searching Wikipedia...")
+        search_query = query.replace("wikipedia", "").strip()
+        if not search_query:
+            self.speak("Please specify what to search on Wikipedia.")
+            return
+        try:
+            result = wikipedia.summary(search_query, sentences=2)
+            self.speak("According to Wikipedia:")
+            self.speak(result)
+        except wikipedia.exceptions.DisambiguationError as e:
+            self.speak(f"Multiple results found. {e.options[0]}")
+        except wikipedia.exceptions.PageError:
+            self.speak("Sorry, I couldn't find anything on Wikipedia.")
+        except Exception as e:
+            print(f"Wikipedia error: {e}")
+            self.speak("Sorry, I couldn't find anything.")
 
 
-def recognize_speech():
-    recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
-        print("Listening...")
-        recognizer.pause_threshold = 1
-        audio = recognizer.listen(source)
-
-    try:
-        # TODO: Use whisper model for offline recognition
-        query = recognizer.recognize_google(
-            audio,
-            language="en-US",
-        )
-        print(f"You said: {query}\n")
-    except sr.UnknownValueError:
-        print("Could not understand audio, please say that again.")
-        return "None"
-    except sr.RequestError as e:
-        print(f"Offline recognizer error: {e}. Ensure 'pocketsphinx' is installed.")
-        return "None"
-    return query.lower()
-
-
-def run_assistant():
-    wish_user()
-
-    parser = argparse.ArgumentParser()
+def parse_arguments() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Voice Assistant with Whisper")
     parser.add_argument(
         "--model",
         default="medium",
-        help="Model to use",
+        help="Whisper model to use",
         choices=["tiny", "base", "small", "medium", "large"],
     )
     parser.add_argument(
-        "--non_english", action="store_true", help="Don't use the english model."
+        "--non_english",
+        action="store_true",
+        help="Don't use the English model",
     )
     parser.add_argument(
         "--energy_threshold",
         default=1000,
-        help="Energy level for mic to detect.",
+        help="Energy level for mic to detect",
         type=int,
     )
     parser.add_argument(
         "--record_timeout",
-        default=2,
-        help="How real time the recording is in seconds.",
+        default=2.0,
+        help="How real-time the recording is in seconds",
         type=float,
     )
     parser.add_argument(
         "--phrase_timeout",
-        default=3,
-        help="How much empty space between recordings before we "
-        "consider it a new line in the transcription.",
+        default=3.0,
+        help="How much empty space between recordings before considering it a new phrase",
         type=float,
     )
-    if "linux" in platform:
+    if IS_LINUX:
         parser.add_argument(
             "--default_microphone",
             default="pulse",
-            help="Default microphone name for SpeechRecognition. "
-            "Run this with 'list' to view available Microphones.",
+            help="Default microphone name. Use 'list' to view available microphones",
             type=str,
         )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    # The last time a recording was retrieved from the queue.
-    phrase_time = None
-    # Thread safe Queue for passing data from the threaded recording callback.
-    data_queue = Queue()
-    # Bytes object which holds audio data for the current phrase
-    phrase_bytes = bytes()
-    # We use SpeechRecognizer to record our audio because it has a nice feature where it can detect when speech ends.
+
+def setup_microphone(mic_name: Optional[str] = None) -> sr.Microphone:
+    """Setup and return microphone source."""
+    if not IS_LINUX:
+        return sr.Microphone(sample_rate=SAMPLE_RATE)
+
+    if not mic_name or mic_name == "list":
+        print("Available microphone devices:")
+        for index, name in enumerate(sr.Microphone.list_microphone_names()):
+            print(f'  [{index}] "{name}"')
+        sys.exit(0)
+
+    # Find microphone by name
+    for index, name in enumerate(sr.Microphone.list_microphone_names()):
+        if mic_name.lower() in name.lower():
+            return sr.Microphone(sample_rate=SAMPLE_RATE, device_index=index)
+
+    print(f"Warning: Microphone '{mic_name}' not found. Using default.")
+    return sr.Microphone(sample_rate=SAMPLE_RATE)
+
+
+class WhisperTranscriber:
+    """Handles Whisper-based speech transcription."""
+
+    def __init__(
+        self,
+        model_name: str,
+        non_english: bool,
+        recorder: sr.Recognizer,
+        source: sr.Microphone,
+        record_timeout: float,
+        phrase_timeout: float,
+        data_queue: Queue,
+    ):
+        self.model_name = model_name
+        self.non_english = non_english
+        self.recorder = recorder
+        self.source = source
+        self.record_timeout = record_timeout
+        self.phrase_timeout = phrase_timeout
+        self.data_queue = data_queue
+        self.audio_model = self._load_model()
+        self.phrase_time: Optional[datetime] = None
+        self.phrase_bytes = bytes()
+        self.transcription = [""]
+
+    def _load_model(self) -> whisper.Whisper:
+        """Load Whisper model."""
+        model = self.model_name
+        if model != "large" and not self.non_english:
+            model = f"{model}.en"
+        print(f"Loading Whisper model: {model}...")
+        return whisper.load_model(model)
+
+    def _record_callback(self, _: sr.Recognizer, audio: sr.AudioData) -> None:
+        """Threaded callback to receive audio data."""
+        data = audio.get_raw_data()
+        self.data_queue.put(data)
+
+    def start_listening(self) -> None:
+        """Start background audio listening."""
+        with self.source:
+            self.recorder.adjust_for_ambient_noise(self.source)
+        self.recorder.listen_in_background(
+            self.source,
+            self._record_callback,
+            phrase_time_limit=self.record_timeout,
+        )
+        print("Model loaded. Listening...\n")
+
+    def process_audio_queue(self) -> Optional[str]:
+        """
+        Process audio from queue and return transcribed text if phrase is complete.
+        Returns None if no new complete phrase, or empty string if processing incomplete phrase.
+        """
+        if self.data_queue.empty():
+            return None
+
+        now = datetime.now()
+        phrase_complete = False
+
+        # Check if phrase is complete (enough time passed)
+        if self.phrase_time and now - self.phrase_time > timedelta(seconds=self.phrase_timeout):
+            self.phrase_bytes = bytes()
+            phrase_complete = True
+
+        self.phrase_time = now
+
+        # Combine audio data from queue
+        audio_data = b"".join(list(self.data_queue.queue))
+        self.data_queue.queue.clear()
+        self.phrase_bytes += audio_data
+
+        if not self.phrase_bytes:
+            return None
+
+        # Convert audio to numpy array
+        audio_np = np.frombuffer(self.phrase_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+
+        # Transcribe
+        try:
+            result = self.audio_model.transcribe(audio_np, fp16=torch.cuda.is_available())
+            text = result["text"].strip()
+        except Exception as e:
+            print(f"Transcription error: {e}")
+            return None
+
+        # Update transcription history
+        if phrase_complete:
+            self.transcription.append(text)
+            print(f"You: {text}\n")
+            return text
+        else:
+            self.transcription[-1] = text
+            return ""
+
+
+def run_assistant() -> None:
+    """Main assistant loop."""
+    args = parse_arguments()
+    
+    # Initialize assistant
+    assistant = VoiceAssistant()
+    assistant.wish_user()
+
+    # Setup microphone
+    mic_name = getattr(args, "default_microphone", None) if IS_LINUX else None
+    source = setup_microphone(mic_name)
+
+    # Setup speech recognizer
     recorder = sr.Recognizer()
     recorder.energy_threshold = args.energy_threshold
-    # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
     recorder.dynamic_energy_threshold = False
 
-    # Important for linux users.
-    # Prevents permanent application hang and crash by using the wrong Microphone
-    if "linux" in platform:
-        mic_name = args.default_microphone
-        if not mic_name or mic_name == "list":
-            print("Available microphone devices are: ")
-            for index, name in enumerate(sr.Microphone.list_microphone_names()):
-                print(f'Microphone with name "{name}" found')
-            return
-        else:
-            for index, name in enumerate(sr.Microphone.list_microphone_names()):
-                if mic_name in name:
-                    source = sr.Microphone(sample_rate=16000, device_index=index)
-                    break
-    else:
-        source = sr.Microphone(sample_rate=16000)
-
-    # Load / Download model
-    model = args.model
-    if args.model != "large" and not args.non_english:
-        model = model + ".en"
-    audio_model = whisper.load_model(model)
-
-    record_timeout = args.record_timeout
-    phrase_timeout = args.phrase_timeout
-
-    transcription = [""]
-
-    with source:
-        recorder.adjust_for_ambient_noise(source)
-
-    def record_callback(_, audio: sr.AudioData) -> None:
-        """
-        Threaded callback function to receive audio data when recordings finish.
-        audio: An AudioData containing the recorded bytes.
-        """
-        # Grab the raw bytes and push it into the thread safe queue.
-        data = audio.get_raw_data()
-        data_queue.put(data)
-
-    # Create a background thread that will pass us raw audio bytes.
-    # We could do this manually but SpeechRecognizer provides a nice helper.
-    recorder.listen_in_background(
-        source, record_callback, phrase_time_limit=record_timeout
+    # Initialize transcriber
+    data_queue = Queue()
+    transcriber = WhisperTranscriber(
+        model_name=args.model,
+        non_english=args.non_english,
+        recorder=recorder,
+        source=source,
+        record_timeout=args.record_timeout,
+        phrase_timeout=args.phrase_timeout,
+        data_queue=data_queue,
     )
+    transcriber.start_listening()
 
-    # Cue the user that we're ready to go.
-    print("Model loaded.\n")
+    # Main loop
+    try:
+        while True:
+            # Process audio queue
+            query = transcriber.process_audio_queue()
 
-    while True:
-        # query = take_command()
-        # query = recognize_speech()
-        now = datetime.now()
+            # Only process commands when we have a complete phrase
+            if query and query != "none":
+                if not assistant.handle_command(query):
+                    break
 
-        if not data_queue.empty():
-            phrase_complete = False
-            # If enough time has passed between recordings, consider the phrase complete.
-            # Clear the current working audio buffer to start over with the new data.
-            if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
-                phrase_bytes = bytes()
-                phrase_complete = True
-            # This is the last time we received new audio data from the queue.
-            phrase_time = now
-
-            # Combine audio data from queue
-            audio_data = b"".join(data_queue.queue)
-            data_queue.queue.clear()
-
-            # Add the new audio data to the accumulated data for this phrase
-            phrase_bytes += audio_data
-
-            # Convert in-ram buffer to something the model can use directly without needing a temp file.
-            # Convert data from 16 bit wide integers to floating point with a width of 32 bits.
-            # Clamp the audio stream frequency to a PCM wavelength compatible default of 32768hz max.
-            audio_np = (
-                np.frombuffer(phrase_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-            )
-
-            # Read the transcription.
-            result = audio_model.transcribe(audio_np, fp16=torch.cuda.is_available())
-            text = result["text"].strip()
-
-            # If we detected a pause between recordings, add a new item to our transcription.
-            # Otherwise edit the existing one.
-            if phrase_complete:
-                transcription.append(text)
-            else:
-                transcription[-1] = text
-
-            # Clear the console to reprint the updated transcription.
-            os.system("cls" if os.name == "nt" else "clear")
-            for line in transcription:
-                print(line)
-            # Flush stdout.
-            print("", end="", flush=True)
-        else:
-            # Infinite loops are bad for processors, must sleep.
-            sleep(0.25)
-
-        query = transcription[-1].lower()
-
-        if "wikipedia" in query:
-            speak("Searching Wikipedia...")
-            query = query.replace("wikipedia", "")
-            try:
-                result = wikipedia.summary(query, sentences=2)
-                speak("According to Wikipedia:")
-                speak(result)
-            except:
-                speak("Sorry, I couldn't find anything.")
-
-        elif "open youtube" in query:
-            speak("Opening YouTube...")
-            webbrowser.open("https://www.youtube.com/")
-
-        elif "open google" in query:
-            speak("Opening Google...")
-            webbrowser.open("https://www.google.com/")
-
-        elif "time" in query:
-            strTime = datetime.now().strftime("%H:%M:%S")
-            speak(f"The current time is {strTime}")
-
-        elif "joke" in query:
-            joke = pyjokes.get_joke()
-            speak(joke)
-
-        elif "exit" in query or "bye" in query:
-            speak("Goodbye! Have a nice day!")
-            break
-
-        else:
-            speak("Sorry, I didn't understand that. Try again.")
+            # Reduce CPU usage when queue is empty
+            if query is None:
+                sleep(0.25)
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        assistant.speak("Goodbye!")
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        raise
 
 
-def main():
-    print("Hello from voice-assistant!")
+def main() -> None:
+    """Entry point for the voice assistant."""
+    print("Voice Assistant starting...")
     run_assistant()
 
 
