@@ -244,7 +244,7 @@ def run_assistant():
             webbrowser.open("https://www.google.com/")
 
         elif "time" in query:
-            strTime = datetime.datetime.now().strftime("%H:%M:%S")
+            strTime = datetime.now().strftime("%H:%M:%S")
             speak(f"The current time is {strTime}")
 
         elif "joke" in query:
