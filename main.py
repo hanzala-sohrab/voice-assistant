@@ -105,7 +105,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Voice Assistant with Whisper")
     parser.add_argument(
         "--model",
-        default="medium",
+        default="base",
         help="Whisper model to use",
         choices=["tiny", "base", "small", "medium", "large"],
     )
@@ -122,13 +122,13 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--record_timeout",
-        default=2.0,
+        default=1.0,
         help="How real-time the recording is in seconds",
         type=float,
     )
     parser.add_argument(
         "--phrase_timeout",
-        default=3.0,
+        default=1.5,
         help="How much empty space between recordings before considering it a new phrase",
         type=float,
     )
@@ -301,7 +301,7 @@ def run_assistant() -> None:
 
             # Reduce CPU usage when queue is empty
             if query is None:
-                sleep(0.25)
+                sleep(0.1)
     except KeyboardInterrupt:
         print("\nShutting down...")
         assistant.speak("Goodbye!")
